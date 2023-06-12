@@ -22,7 +22,7 @@ class RoBERTaVictimModel(BaseModel):
         # self.model.cuda()
         self.max_len = max_len
         self.optimizer = AdamW(self.model.parameters(), lr = 1e-5)
-        self.max_batch_size = 128
+        self.max_batch_size = 512
 
     def get_input_embedding(self,):
         return self.model.roberta.embeddings.word_embeddings

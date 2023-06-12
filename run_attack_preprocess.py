@@ -17,7 +17,7 @@ from src.models.albert_model import ALBERTVictimModel
 from src.data_util.dataloader import load_attack_dataset, get_class_num, get_task_type
 
 from src.attack.context import ctx_noparamgrad
-
+from transformers import default_data_collator
 
 import datasets
 import time
@@ -94,12 +94,6 @@ if __name__ == '__main__':
         clsf = ALBERTVictimModel(model_name_or_path = args.model_name_or_path, cache_dir = cache_dir, device = device, num_labels = num_classes,
                             max_len = 100)
 
-    if 'textattack/bert-base-uncased-MNLI' in args.model_name_or_path and args.dataset == 'mnli':  ## textattack label map for mnli
-        label_map = {0: 1, 1: 2, 2: 0}
-    else:
-        label_map = {x:x for x in range(num_classes)}
-    print(label_map)
-
     TEST_SIZE = args.size
     patience = args.patience 
 
@@ -124,6 +118,9 @@ if __name__ == '__main__':
                         use_lm = args.use_lm, lm_loss_beta= args.lm_beta,
                         use_cw_loss = args.cw, use_cache = args.use_cache,
                         victim = args.victim, num_classes = num_classes, sentence_pair = sentence_pair)
+    attack_dataset = attack_dataset.select(range(1,TEST_SIZE))
+    attack_dataset = attack_dataset.map(attacker.prepare_build_neighbor_matrix, batched=False, num_proc=1, desc="Building neighbor matrices")
+
 
     ## Load Log Module
     logger = LogModule()
@@ -137,50 +134,53 @@ if __name__ == '__main__':
     corr = 0
 
     start_time = time.time()
-    for idx in tqdm(range(len(attack_dataset['label']))):
-        if count >= TEST_SIZE and TEST_SIZE > 0:
-            break
+    batch_size = 32
+    # dataloader = torch.utils.data.DataLoader(attack_dataset, collate_fn=default_data_collator, batch_size=batch_size)
+
+    for batch_idx in tqdm(range(0, len(attack_dataset), batch_size)):
+    # for idx, batch in enumerate(tqdm(attack_dataset)):
         index_count += 1
-        if sentence_pair:
-            sentence = (attack_dataset['premise'][idx], attack_dataset['hypothesis'][idx])
-        else:
-            sentence = attack_dataset['sentence'][idx]
-        orig_label = attack_dataset['label'][idx]
-        orig_label = label_map[orig_label]
-        if sentence_pair:
-            orig_score = clsf.predict([sentence[0]], [sentence[1]])[0]        
-        else:
-            orig_score = clsf.predict([sentence])[0]
+        batch = attack_dataset[batch_idx:batch_idx + batch_size]
+        sentences = batch['sentence']
+        orig_labels = batch['label']
         
-        ## filter wrong samples
-        pred_label = np.argmax(orig_score)
-        if orig_label != pred_label:
-            print("skipping wrong samples....")
-            skip += 1
-            count += 1
-            continue
-        print("Attacking %d/%d sample.... "%(count, TEST_SIZE))
-        count += 1
-        print(sentence)
+        # orig_score = clsf.predict([sentence])[0]
+        # ## filter wrong samples
+        # pred_label = np.argmax(orig_score)
+        # if orig_label != pred_label:
+        #     print("skipping wrong samples....")
+        #     skip += 1
+        #     count += 1
+        #     continue
+        # print("Attacking %d/%d sample.... "%(count, len(attack_dataset)))
+        # count += batch_size
+        # print(sentence)
         # try:
         t0 = time.time()
         with ctx_noparamgrad(clsf.model):
-            succ_examples, succ_pred_scores, succ_modif_rates, flag \
-                = attacker.attack(sentence, orig_label, restart_num = patience)
-        print(succ_examples)
-        print("Per Sample time: ", time.time() - t0 , " s")
-        assert False
-        if not flag:
-            logger.record(False, idx, sentence, succ_examples, orig_label, -1)
-            failed_index_list.append(str(idx))
-            fail += 1
-        else:
-            succ += 1
-            best_idx = np.argmin(succ_modif_rates)
-            adv_score = succ_pred_scores[best_idx]
-            adv_label = np.argmax(adv_score)
-            adv_example = succ_examples[best_idx]
-            logger.record(True, idx, sentence, succ_examples, orig_label, 1-orig_label)
+            # succ_examples, succ_pred_scores, succ_modif_rates, flag \
+            #     = attacker.attack_preprocesed(batch, restart_num = patience)
+            
+            attack_logs = attacker.attack_preprocesed(batch, restart_num = patience)
+        # print(succ_examples)
+        print("Per Batch time: ", time.time() - t0 , " s")
+        # assert False
+        for sentence, label in zip(sentences, orig_labels):
+            adv_exmaples, adv_pred_scores, adv_modif_rates, attack_flag = attack_logs[sentence]
+            if not attack_flag:
+                logger.record(False, batch_idx, sentence, adv_exmaples, label, -1)
+                fail += 1
+            else:
+                succ += 1
+                best_idx = torch.argmin(torch.stack(adv_modif_rates))
+                adv_score = adv_pred_scores[best_idx]
+                adv_label = np.argmax(adv_score)
+                adv_example = adv_exmaples[best_idx]
+                print("====="*5)
+                print("sentence: ", sentence)
+                print("adv_example: ",  adv_example)
+                print("====="*5)
+                logger.record(True, batch_idx, sentence, adv_exmaples, label, 1-label)
         
         print()
         print(f"[Succeeded / Failed / Skipped / OOM / Total] {succ} / {fail} / {skip} / {oom} / {index_count}")

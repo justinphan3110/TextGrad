@@ -78,7 +78,7 @@ class RobertaSubstitutor(BaseSubstitutor):
         if self.mask_orig:
             sub_words[position] = self.tokenizer.mask_token
         assert sub_words[0] == self.tokenizer.cls_token
-        assert sub_words[-1] == self.tokenizer.sep_token
+        # assert sub_words[-1] == self.tokenizer.sep_token
         
         input_ids_ = torch.tensor([self.tokenizer.convert_tokens_to_ids(sub_words)])
         word_predictions = self.roberta_model(input_ids_.to(self.roberta_model.device))[0].squeeze()[position]  # vocab

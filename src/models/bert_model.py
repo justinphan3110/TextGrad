@@ -11,6 +11,7 @@ import os
 import datasets
 from .base_model import BaseModel
 from tqdm import tqdm
+import time
 
 class BertVictimModel(BaseModel):
     def __init__(self,model_name_or_path = 'bert-base-uncased', 
